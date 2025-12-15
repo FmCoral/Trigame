@@ -10,6 +10,59 @@ import numpy as np
 disp = display.Display()
 cam = camera.Camera(360, 360, fps = 30)
 
+
+def find_center(corners):
+    """
+    根据四个角点计算出九个方格时中心位置
+    :param corners: 角点坐标
+    :return: 中心点坐标
+    """
+    # 排除识别到非矩形形状
+    if len(corners) != 4:
+        return []
+
+    # 预定中心点坐标
+    center_points = np.array([[0, 0], [1/3, 0], [2/3, 0], [1, 0],
+                              [0, 1/3], [1/3, 1/3], [2/3, 1/3], [1, 1/3],
+                              [0, 2/3], [1/3, 2/3], [2/3, 2/3], [1, 2/3],
+                              [0, 1], [1/3, 1], [2/3, 1], [1, 1]])
+    # print(center_points)
+    # 转换目标点
+    dst_points = np.array(corners, dtype=np.float32)
+    # 归一化矩形坐标
+    src_points = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
+    # 添加映射关系
+    transform_matrix = cv.getPerspectiveTransform(src_points, dst_points)
+    # 转换坐标
+    transformed_points = cv.perspectiveTransform(np.array([center_points], dtype=np.float32), transform_matrix)
+    # 转换二维数组
+    points = transformed_points[0]
+
+    # 检查变换后是否是16个点
+    if len(points) != 16:
+        return []
+
+    # 计算九宫格每个格子的中心
+    centers = []
+    for i in range(3):
+        for j in range(3):
+            # 小矩形角点坐标
+            left_top = i * 4 + j
+            right_top = left_top + 1
+            left_bottom = (i + 1) * 4 + j
+            right_bottom = left_bottom + 1
+
+            # 计算中心
+            x = (points[left_top][0] + points[right_top][0] +
+                 points[left_bottom][0] + points[right_bottom][0]) / 4
+            y = (points[left_top][1] + points[right_top][1] +
+                 points[left_bottom][1] + points[right_bottom][1]) / 4
+
+            centers.append((int(x), int(y)))
+
+    return centers
+
+
 def main():
     done = 1
     # 定义卷积核
@@ -65,11 +118,26 @@ def main():
                 corn[3] = corners[np.argmax(corn_sub)]
                 corners = corn
 
-
                 # 绘制棋盘外框
                 cv.drawContours(img_cv, [approx], -1, (0, 255, 0), 2)
                 # 检查棋盘是否被正常框出
-                img = image.cv2image(img_cv, False, False)
+                # img = image.cv2image(img_cv, False, False)
+
+                # 检查是否识别出九个中心
+                centers = find_center(corners)
+                print(centers)
+                for i in range(9):
+                    x, y = centers[i][0], centers[i][1]
+                    img = image.cv2image(img_cv, False, False)
+                    img.draw_string(x, y, f"{i + 1}", image.COLOR_WHITE)
+                    # 在中心画框
+                    width = 20
+                    img.draw_rect(int(x - width / 2), int(y - width / 2), width, width,
+                                  image.COLOR_WHITE)
+                    pass
+
+
+
 
             else:
                 print(f"最大轮廓不是矩形，角点个数为{len(approx)}")
