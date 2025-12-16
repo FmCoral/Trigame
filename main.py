@@ -9,6 +9,8 @@ import numpy as np
 # 初始化
 disp = display.Display()
 cam = camera.Camera(360, 360, fps = 30)
+real_time_date = []
+done_date = []
 
 
 def find_center(corners):
@@ -125,25 +127,81 @@ def main():
 
                 # 检查是否识别出九个中心
                 centers = find_center(corners)
-                print(centers)
-                for i in range(9):
-                    x, y = centers[i][0], centers[i][1]
-                    img = image.cv2image(img_cv, False, False)
-                    img.draw_string(x, y, f"{i + 1}", image.COLOR_WHITE)
-                    # 在中心画框
-                    width = 20
-                    img.draw_rect(int(x - width / 2), int(y - width / 2), width, width,
-                                  image.COLOR_WHITE)
-                    pass
+                # print(centers) # 打印中心点坐标
+                if len(centers) == 9:
+                    one_group = []
+                    for i in range(9):
+                        x, y = centers[i][0], centers[i][1]
+                        # 在中心点画一个点
+                        cv.circle(img_cv, (x, y), 2, (0, 255, 0), -1)
+                        img = image.cv2image(img_cv, False, False)
+                        # 给格子编号
+                        img.draw_string(x, y, f"{i + 1}", image.COLOR_WHITE)
+                        # 在中心画框
+                        width = 30
+                        img.draw_rect(int(x - width / 2), int(y - width / 2), width, width,
+                                      image.COLOR_WHITE)
 
+                        # 直方图设置
+                        # 增强对比度
+                        img.histeq(adaptive=True)
+                        # 设置像素值统计范围，roi大小
+                        hist = img.get_histogram(thresholds=[[0, 100, -128, 127, -128, 127]],
+                                                 roi=[int(x - width / 2), int(y - width / 2), width, width])
+                        # 提取亮度通道中位数
+                        value = hist.get_statistics().a_median()
 
+                        # 检查数值大小，调整阈值
+                        # img.draw_string(x, y+10, f'{value}', image.COLOR_WHITE)
 
+                        # 根据值判定棋子颜色-暂定
+                        color_chess = ''
+                        if value < -110:
+                            color_chess = 1 # 黑
+                        elif value > -80:
+                            color_chess = 2 # 白
+                        else:
+                            color_chess = 0
+
+                        if color_chess == 1:
+                            img.draw_string(x, y + 10, "black", image.COLOR_WHITE)
+
+                        elif color_chess == 2:
+                            img.draw_string(x, y + 10, "white", image.COLOR_BLACK)
+
+                        one_group.append([i+1,color_chess])
+
+                    # 角度识别
+                    rect = cv.minAreaRect(approx)
+                    (cx, cy), (w, h), angle = rect
+                    if 45 < angle < 90:
+                        angle = abs(angle - 90)
+                    elif 0 < angle < 45:
+                        angle = -angle
+                    elif angle == 0 or angle == 90:
+                        angle = 0
+
+                    angle = int(angle)
+                    img.draw_string(5, 10, f"Angle: {angle}", image.COLOR_YELLOW)
+
+                    # 存入棋盘数据
+                    if len(one_group) == 9:
+                        one_group.append(angle)
+                        # print(one_group)
+                        real_time_date.append(one_group.copy())
+                        if len(real_time_date) >3: # 暂存三个数据
+                            real_time_date.pop(0)
+                        one_group.clear()
+
+                print(real_time_date)
 
             else:
-                print(f"最大轮廓不是矩形，角点个数为{len(approx)}")
+                # print(f"最大轮廓不是矩形，角点个数为{len(approx)}")
+                pass
 
         elif len(contours) == 0:
-            print(f"未检测到有效轮廓{done}")
+            # print(f"未检测到有效轮廓{done}")
+            pass
 
         done += 1
         disp.show(img)
