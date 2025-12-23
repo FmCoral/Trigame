@@ -2,6 +2,7 @@ from maix import camera, display, app, image, touchscreen, time
 import traceback
 import cv2 as cv
 import numpy as np
+import play_logic
 # import Uart
 
 # 初始化
@@ -170,6 +171,7 @@ def main():
 
                 # 绘制棋盘外框
                 cv.drawContours(img_cv, [approx], -1, (0, 255, 0), 2)
+
                 # 检查棋盘是否被正常框出
                 # img = image.cv2image(img_cv, False, False)
 
@@ -219,7 +221,7 @@ def main():
 
                         # 根据值判定棋子颜色-暂定
                         color_chess = 0
-                        if value < -90:
+                        if value < -105:
                             color_chess = 1  # 黑
                         elif value > -60:
                             color_chess = 2  # 白
@@ -257,6 +259,7 @@ def main():
                     if len(real_data) > 10:
                         real_data.pop(0)
 
+                # 检查
                 print (len(real_data))
                 if len(real_data) > 0:
                     print(f"最新{real_data[-1]}")
@@ -267,12 +270,16 @@ def main():
         elif len(contours) == 0:
             print(f"[ X ]轮廓{done}")
 
+        # 对弈部分
+        get_state = play_logic.main(real_data)
+        print(f"状态值{get_state}")
+
         # 调用exit_program，判断是否需要退出
         if exit_program(img):
             break  # 退出程序
 
         done += 1
-        # disp.show(img)
+        disp.show(img)
         time.sleep(0.1)
 
 
