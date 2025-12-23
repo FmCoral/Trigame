@@ -3,7 +3,7 @@ import traceback
 import cv2 as cv
 import numpy as np
 import play_logic
-# import Uart
+import Uart
 
 # 初始化
 disp = display.Display()
@@ -14,15 +14,8 @@ real_data = []  # 准备发送数据列表
 one_group_data = []  # 临时储存发送数据列表
 delivered_data = []  # 已发送的数据，最大长度暂定为5
 should_exit = False  # 全局退出标志
-# # # 串口初始化
-# uart_obj = Uart.UartHandler(
-#     Pin_1="A18",
-#     Pin_2="A19",
-#     Rx="UART1_RX",
-#     Tx="UART1_TX",
-#     bitrate=9600,
-#     device="/dev/ttyS1"
-# )
+# # 串口初始化
+uart_obj = Uart.UartHandler()
 
 
 def find_center(corners):
@@ -298,4 +291,3 @@ if __name__ == '__main__':
         disp.close()
         # uart_obj.close()
         print("程序退出")
-
