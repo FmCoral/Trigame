@@ -4,11 +4,14 @@ import threading
 class UartHandler:
     # 定义帧头帧尾映射（避免硬编码，便于扩展）
     FRAME_CONFIG = {
-        1: (0xA1, 0xA2),
-        2: (0xB1, 0xB2),
-        3: (0xC1, 0xC2),
-        4: (0xF1, 0xF2),
-        5: (0xE1, 0xE2)
+        1: (0xA1, 0xAA, 0xA2), # 发送角度
+        2: (0xA1, 0xBB, 0xA2), # 下在哪里
+        3: (0xA1, 0xCC, 0xA2), # 违规情况
+        4: (0xA1, 0xFF, 0xA2), # 黑棋赢
+        5: (0xA1, 0xFF, 0xA2), # 白棋赢
+        6: (0xA1, 0xFF, 0xA2), # 平局
+        7: (0xF1, 0xF2),
+        8: (0xE1, 0xE2)
     }
 
     def __init__(self,
@@ -45,7 +48,7 @@ class UartHandler:
             time.sleep(0.001)
 
     def get_data(self, clear=True):
-        """获取接收数据（提取有效帧后清空全部缓存）"""
+        """获取接收数据（修改：提取有效帧后清空全部缓存）"""
         with self.lock:
             # 复制缓存数据，避免操作原列表
             data = self.receive_data.copy()
@@ -88,14 +91,14 @@ class UartHandler:
         if head_pos == -1:
             return []
 
-        # 步骤5：提取完整帧 → 缓存已清空
+        # 步骤5：提取完整帧 → 缓存已清空，无需保留剩余数据（核心改动）
         complete_frame = data[head_pos:tail_pos+1]
 
         return complete_frame
 
     def send_data(self, data_list, frame_type):
         """
-        通用发送方法
+        通用发送方法（提取公共逻辑，避免重复）
         :param data_list: 待发送的原始数据列表
         :param frame_type: 帧类型（1/2/3，对应FRAME_CONFIG中的配置）
         :return: 发送的字节数，失败返回None
@@ -105,8 +108,8 @@ class UartHandler:
             mapped_data = [num + self.offset for num in data_list]
 
             # 2. 获取帧头、帧尾并拼接完整帧
-            header, footer = self.FRAME_CONFIG[frame_type]
-            full_frame = [header] + mapped_data + [footer]
+            header_1, data_type, footer = self.FRAME_CONFIG[frame_type]
+            full_frame = [header_1, data_type] + mapped_data + [footer]
 
             # 3. 转字节并发送
             send_bytes = bytes(full_frame)
@@ -122,7 +125,7 @@ class UartHandler:
             print(f"帧类型{frame_type}发送失败：{e}")
             return None
 
-    # 发送接口
+    # 发送接口（函数名完全不变）
     def send_1(self, data_list):
         """仅发送角度"""
         return self.send_data(data_list, 1)
@@ -132,6 +135,15 @@ class UartHandler:
 
     def send_3(self, data_list):
         return self.send_data(data_list, 3)
+
+    def send_4(self, data_list):
+        return self.send_data(data_list, 4)
+
+    def send_5(self, data_list):
+        return self.send_data(data_list, 5)
+
+    def send_6(self, data_list):
+        return self.send_data(data_list, 6)
 
     def close(self):
         """关闭串口（程序结束时调用）"""

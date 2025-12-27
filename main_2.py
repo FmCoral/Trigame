@@ -5,19 +5,6 @@ import numpy as np
 import play_logic
 import Uart
 
-# 初始化
-disp = display.Display()
-cam = camera.Camera(360, 360, fps=30)
-ts = touchscreen.TouchScreen()  # 初始化触摸屏
-judge_data = [] # 临时判断列表
-real_data = []  # 准备发送数据列表
-one_group_data = []  # 临时储存发送数据列表
-delivered_data = []  # 已发送的数据，最大长度暂定为5
-should_exit = False  # 全局退出标志
-# # 串口初始化
-uart_obj = Uart.UartHandler()
-
-
 def find_center(corners):
     """
     根据四个角点计算出九个方格时中心位置
@@ -33,7 +20,7 @@ def find_center(corners):
                               [0, 1 / 3], [1 / 3, 1 / 3], [2 / 3, 1 / 3], [1, 1 / 3],
                               [0, 2 / 3], [1 / 3, 2 / 3], [2 / 3, 2 / 3], [1, 2 / 3],
                               [0, 1], [1 / 3, 1], [2 / 3, 1], [1, 1]])
-    # print(center_points)
+
     # 转换目标点
     dst_points = np.array(corners, dtype=np.float32)
     # 归一化矩形坐标
@@ -104,22 +91,29 @@ def exit_program(img):
 
 def main():
     global real_data
-    global delivered_data
     global judge_data
     global one_group_data
+    global angle
     done = 1
     # 定义卷积核
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5))
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
     while not app.need_exit():
         img = cam.read()
-        # 转换成OpenCV格式灰度图
-        img_cv = image.image2cv(img, False, False)  # 这一步已经转化为BGR格式
-        img_gray = cv.cvtColor(img_cv, cv.COLOR_BGR2GRAY)
+        # 转换成OpenCV
+        img_cv = image.image2cv(img, False, False)
+        # 将原图转换为HSV颜色空间
+        hsv_img = cv.cvtColor(img_cv, cv.COLOR_BGR2HSV)
 
-        # 去除噪点-高斯模糊(暂定5,5)
-        img_blur = cv.GaussianBlur(img_gray, [5, 5], 0)
-        # 边缘检测-阈值暂定50,150
-        img_edge = cv.Canny(img_blur, 50, 150)
+        # 定义目标绿色的HSV范围--好像是通道转换步骤错了，红色HSV实际上变成了绿的，将错就错
+        lower_green = np.array([100, 80, 50])  # H:100-130（覆盖青绿/草绿），S≥80（低饱和），V≥50（低明度）
+        upper_green = np.array([130, 255, 255]) # S/V上限拉满
+        # 3. 生成绿色掩码
+        green_mask = cv.inRange(hsv_img, lower_green, upper_green)
+
+        # 去除噪点-高斯模糊(暂定3,3)
+        img_blur = cv.GaussianBlur(green_mask, [3, 3], 0)
+        # 边缘检测-阈值暂定30,90
+        img_edge = cv.Canny(img_blur, 30, 90)
 
         # 检查边缘是否被识别出
         # img_edge_maixcam = image.cv2image(img_edge)
@@ -130,16 +124,14 @@ def main():
         # 腐蚀
         img_erode = cv.erode(img_dilate, kernel)
 
-        # 查找轮廓
+        # 查找轮廓：得到仅包含绿色（实际为红色）区域的轮廓
         contours, _ = cv.findContours(img_erode, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
         # 检查
         # print(len(contours))
         if len(contours) > 0:
             # 找出最大轮廓
             biggest_contours = max(contours, key=cv.contourArea)
-            # 棋盘镶嵌在一个圆里面，可能会用到第二大轮廓，预留
-            # second_biggest = sorted(contours, key=cv.contourArea, reverse=True)[1]
-            # biggest_contours = second_biggest
             # 近似多边形
             epsilon = 0.02 * cv.arcLength(biggest_contours, True)
             approx = cv.approxPolyDP(biggest_contours, epsilon, True)  # 角点个数
@@ -161,9 +153,8 @@ def main():
                 # 左下，y-x最大
                 corn[3] = corners[np.argmax(corn_sub)]
                 corners = corn
-
                 # 绘制棋盘外框
-                cv.drawContours(img_cv, [approx], -1, (0, 255, 0), 2)
+                cv.drawContours(img_cv, [approx], -1, (0, 0, 255), 2)
 
                 # 检查棋盘是否被正常框出
                 # img = image.cv2image(img_cv, False, False)
@@ -196,7 +187,7 @@ def main():
                         # 给格子编号
                         img.draw_string(x, y, f"{i + 1}", image.COLOR_WHITE)
                         # 在中心画框
-                        width = 30
+                        width = 20
                         img.draw_rect(int(x - width / 2), int(y - width / 2), width, width,
                                       image.COLOR_WHITE)
 
@@ -210,20 +201,20 @@ def main():
                         value = hist.get_statistics().a_median()
 
                         # 检查数值大小，调整阈值
-                        img.draw_string(x, y-10, f'{value}', image.COLOR_BLUE)
+                        # img.draw_string(x, y-10, f'{value}', image.COLOR_BLUE)
 
                         # 根据值判定棋子颜色-暂定
                         color_chess = 0
                         if value < -105:
                             color_chess = 1  # 黑
-                        elif value > -60:
+                        elif value > -65:
                             color_chess = 2  # 白
                         else:
                             color_chess = 0
 
+                        # 标记棋子信息
                         if color_chess == 1:
                             img.draw_string(x, y + 10, "black", image.COLOR_WHITE)
-
                         elif color_chess == 2:
                             img.draw_string(x, y + 10, "white", image.COLOR_BLACK)
 
@@ -231,31 +222,31 @@ def main():
 
                     judge_data.append(one_group_data.copy())
 
+                    # 有效数据筛选
                     if len(judge_data) > 2:
                         # 先判断3个数据是否全相等
                         if len(judge_data) == 3 and judge_data[0] == judge_data[1] == judge_data[2]:
-                            # current_data = judge_data[0]
-                            #
                             if len(real_data) == 0:  # 如果首次采集
                                 real_data.append(judge_data.copy()[0])
                             else:
-                                # 对比上一次有效数据
+                                # 省略重复数据
                                 if judge_data[0] != real_data[-1]:
                                     real_data.append(judge_data.copy()[0])
-
-                            # 清空临时列表
+                            # 清空临时判断列表
                             judge_data.clear()
                         else:
                             # 3个数据不全相等，清空重采
                             judge_data.clear()
 
+                    # 控制历史数据列表长度
                     if len(real_data) > 10:
                         real_data.pop(0)
 
                 # 检查
-                print (len(real_data))
+                print (len(real_data), end="")
                 if len(real_data) > 0:
-                    print(f"最新{real_data[-1]}")
+                    # print(f"最新{real_data[-1]}")
+                    print("·", end="")
 
             else:
                 print(f"[ X ]角点{len(approx)}")
@@ -263,9 +254,54 @@ def main():
         elif len(contours) == 0:
             print(f"[ X ]轮廓{done}")
 
-        # 对弈部分
-        get_state = play_logic.main(real_data)
-        print(f"状态值{get_state}")
+        # 对弈部分-触发数据部分
+        recv_frame = uart_obj.get_data()
+        if recv_frame and angle:
+            print(f"收到：{recv_frame}")
+            if recv_frame == [241, 1, 242]: # 发送角度数据
+                uart_obj.send_1([angle])
+                print(f"角度是{angle}")
+
+            elif recv_frame == [225, 1, 226]: # 人类无落子 [序号，角度]
+                best_place = play_logic.attack_logic(real_data[-1])
+                uart_obj.send_2([best_place, angle])
+                print(f"落 {best_place} 号格")
+
+            elif recv_frame == [225, 2, 226]: # 正常对弈
+                state_now, best_place = play_logic.main_1(real_data) # state_now = 0，11,22,33 内 黑 白 平
+                if state_now == 0: # 继续下棋
+                    uart_obj.send_2([best_place, angle])
+                    print(f"落 {best_place} 号格")
+
+                elif state_now == 11: # 黑棋赢
+                    uart_obj.send_4([])
+
+                elif state_now == 22: # 白棋赢
+                    uart_obj.send_5([])
+
+                elif state_now == 33: # 平局
+                    uart_obj.send_6([])
+
+            recv_frame.clear()
+
+        # 主动识别错误部分
+        if len(real_data) > 2:
+            is_legal = play_logic.judge_rules(real_data[-2],real_data[-1])
+            if is_legal:
+                # 合法，不做处理
+                 is_win = play_logic.check_win(real_data[-1])
+                 if is_win == 11: # 黑棋赢
+                    uart_obj.send_4([])
+
+                 elif is_win == 22: # 白棋赢
+                    uart_obj.send_5([])
+
+                 elif is_win== 33: # 平局
+                    uart_obj.send_6([])
+
+            elif not is_legal:
+                print("检测到违规")
+
 
         # 调用exit_program，判断是否需要退出
         if exit_program(img):
@@ -273,11 +309,23 @@ def main():
 
         done += 1
         disp.show(img)
-        time.sleep(0.1)
+        time.sleep(0.001)
 
 
 if __name__ == '__main__':
     try:
+        # 初始化
+        disp = display.Display()
+        cam = camera.Camera(360, 360, fps=30)
+        ts = touchscreen.TouchScreen()  # 初始化触摸屏
+        judge_data = []  # 临时判断列表
+        real_data = []  # 棋盘历史数据列表，长度最大为10
+        one_group_data = []  # 临时储存发送数据列表
+        should_exit = False  # 全局退出标志
+        angle = None  # 角度
+        # 串口初始化
+        uart_obj = Uart.UartHandler()
+
         main()
 
     except Exception as e:
@@ -289,5 +337,5 @@ if __name__ == '__main__':
         # 退出时释放资源
         cam.close()
         disp.close()
-        # uart_obj.close()
+        uart_obj.close()
         print("程序退出")

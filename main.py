@@ -1,11 +1,8 @@
-"""现在有一个有效数据列表，长度从0到10，根据最新数据和上一次的数据判断棋盘状态发生了什么变化"""
-
 import threading
 from maix import camera, display, app, image, touchscreen, time, uart, pinmap
 import traceback
 import cv2 as cv
 import numpy as np
-
 
 # 初始化
 disp = display.Display()
@@ -18,17 +15,14 @@ should_exit = False  # 全局退出标志
 angle = None  # 角度
 
 
-
-
-
 class UartHandler:
     # 定义帧头帧尾映射（避免硬编码，便于扩展）
     FRAME_CONFIG = {
         1: (0xA1, 0xAA, 0xA2), # 发送角度
         2: (0xA1, 0xBB, 0xA2), # 下在哪里
         3: (0xA1, 0xCC, 0xA2), # 违规情况
-        4: (0xA1, 0xFF, 0xA2), # 黑棋赢
-        5: (0xA1, 0xFF, 0xA2), # 白棋赢
+        4: (0xA1, 0xEE, 0xA2), # 黑棋赢
+        5: (0xA1, 0xDD, 0xA2), # 白棋赢
         6: (0xA1, 0xFF, 0xA2), # 平局
         7: (0xF1, 0xF2),
         8: (0xE1, 0xE2)
@@ -56,7 +50,7 @@ class UartHandler:
 
         threading.Thread(target=self._recv_loop, daemon=True).start()
 
-        print(f"串口初始化完成：{device} | 波特率={bitrate}")
+        print(f"串口初始化完成：{device} ，波特率={bitrate}")
 
     def _recv_loop(self):
         while self.running:
@@ -72,7 +66,7 @@ class UartHandler:
         with self.lock:
             # 复制缓存数据，避免操作原列表
             data = self.receive_data.copy()
-            # 先清空原缓存（后续仅在未提取到有效帧时放回）
+            # 清空原缓存
             if clear:
                 self.receive_data = []
 
@@ -107,20 +101,20 @@ class UartHandler:
                 head_pos = i
                 break
 
-        # 步骤4：未找到对应帧头 → 缓存已清空，直接返回空
+        # 步骤4：未找到对应帧头 → 清空缓存，直接返回空
         if head_pos == -1:
             return []
 
-        # 步骤5：提取完整帧 → 缓存已清空，无需保留剩余数据（核心改动）
+        # 步骤5：提取完整帧
         complete_frame = data[head_pos:tail_pos+1]
 
         return complete_frame
 
     def send_data(self, data_list, frame_type):
         """
-        通用发送方法（提取公共逻辑，避免重复）
+        通用发送方法
         :param data_list: 待发送的原始数据列表
-        :param frame_type: 帧类型（1/2/3，对应FRAME_CONFIG中的配置）
+        :param frame_type: 帧类型（1/2/3···，对应FRAME_CONFIG中的配置）
         :return: 发送的字节数，失败返回None
         """
         try:
@@ -137,15 +131,15 @@ class UartHandler:
 
             # 4. 调试打印
             hex_str = ' '.join([f'0x{b:02X}' for b in send_bytes])
-            print(f"类型{frame_type} | 十六进制：{hex_str} | 字节数：{send_len}")
+            print(f"十六进制：{hex_str} | 字节数：{send_len}")
 
             return send_len
 
         except Exception as e:
-            print(f"帧类型{frame_type}发送失败：{e}")
+            print(f"发送失败：{e}")
             return None
 
-    # 发送接口（函数名完全不变）
+    # 发送接口
     def send_1(self, data_list):
         """仅发送角度"""
         return self.send_data(data_list, 1)
@@ -166,28 +160,18 @@ class UartHandler:
         return self.send_data(data_list, 6)
 
     def close(self):
-        """关闭串口（程序结束时调用）"""
+        """关闭串口"""
         self.running = False  # 停止接收线程
         time.sleep(0.01)      # 等待线程退出
         self.serial.close()
         print("串口已关闭")
 
 
-
-
-
-
-
-
-# 先判断qipan_data里面的数据，情况1：没有数据，情况2：有一个数据，必然是空状态，情况三，大于等于两个数据。
-# 其中情况三又分为以下情况：1、最新数据和上一次数据属于遵守规则的变化，2、违反规则，需要恢复到上一个数据的格式
-
-# 棋盘输赢平局继续四种情况判断
 def check_win(current_data):
     """
     判断棋盘输赢
     :param current_data: 18位棋盘数据
-    :return: 1=黑赢，2=白赢，0=未赢；同时打印匹配的赢线
+    :return: 11=黑赢，22=白赢，33=平局，0=继续；同时打印匹配的赢线
     """
     # 赢线位置组合
     win_lines = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [1, 4, 7], [2, 5, 8], [3, 6, 9], [1, 5, 9], [3, 5, 7]]
@@ -222,43 +206,39 @@ def check_win(current_data):
             print("棋盘已下满，平局")
             return 33  # 平局
 
-    print("继续")
     return 0
 
 
 def judge_rules(prev_data, curr_data):
     """
-    校验下棋的3个核心合规条件：格式+落子数量+落子位置
+    判断落子是否合规
     :param prev_data: 上一次棋盘数据
     :param curr_data: 当前棋盘数据
-    :return: (bool, str) → (是否合规, 原因说明)
+    :return: bool
     """
 
-    # 提取两次棋盘的颜色位（保留9个位置的颜色值，简化对比）
-    prev_color = [prev_data[2 * n - 1] for n in range(1, 10)]  # 上一次各位置颜色（9位）
-    curr_color = [curr_data[2 * n - 1] for n in range(1, 10)]  # 当前各位置颜色（9位）
+    # 提取两次棋盘的颜色位值
+    prev_color = [prev_data[2 * n - 1] for n in range(1, 10)]  # 上一次各位置颜色
+    curr_color = [curr_data[2 * n - 1] for n in range(1, 10)]  # 当前各位置颜色
 
-    # 找出两次颜色变化的位置（0-8，对应棋盘1-9号位）
+    # 找出两次颜色变化的位置
     changed_positions = []
     for idx in range(9):
         if prev_color[idx] != curr_color[idx]:
             changed_positions.append(idx)
 
-    # ========== 落子数量合规（仅能有1处变化） ==========
+    # 1、判断落子数量合规（仅能有1处变化）
     if len(changed_positions) > 1:
-        print(f"犯规：多落子（共{len(changed_positions)}处位置变化，仅允许1处）")
+        print(f"犯规：多落子（共{len(changed_positions)}处位置变化")
         return False
 
-    # ========== 落子位置合规（只能落在空位置，且落子颜色有效） ==========
+    # 2、判断落子位置合规（只能落在空位置，且落子颜色有效）
     change_idx = changed_positions[0]  # 唯一变化的位置（0-8）
     prev_val = prev_color[change_idx]  # 上一次该位置颜色
     curr_val = curr_color[change_idx]  # 当前该位置颜色
 
     if prev_val != 0:
-        print(f"犯规：覆盖已有棋子（棋盘{change_idx + 1}号位上一次为{prev_val}，非空）")
-        return False
-    if curr_val not in [1, 2]:
-        print(f"犯规：落子颜色无效（棋盘{change_idx + 1}号位当前为{curr_val}，仅允许1/2）")
+        print(f"犯规：覆盖已有棋子（棋盘{change_idx + 1}号位上一次为{prev_val}，当前为{curr_val}）")
         return False
 
     # 所有核心条件满足 → 合规
@@ -267,14 +247,14 @@ def judge_rules(prev_data, curr_data):
 
 def attack_logic(attack_data):
     """
-    三子棋AI落子逻辑（优先级：直接赢→堵对方→占中心→占角→占边）
-    :param attack_data: 交替列表 [格子1,状态1, 格子2,状态2,...,格子9,状态9]，状态0=空/1=黑/2=白
+    三子棋落子逻辑（优先级：直接赢→堵对方→占中心→占角→占边）
+    :param attack_data: 棋盘一次有效数据列表，状态0=空/1=黑/2=白
     :return: 最优落子格子序号（1-9），无落子位置返回None（棋盘满）
     """
-    # ==================== 1. 数据校验与格式化 ====================
+    #  1、 数据校验与格式化
     # 初始化棋盘映射：格子序号(1-9) → 状态(0/1/2)，默认空
     board_map = {num: 0 for num in range(1, 10)}
-    # 遍历交替列表
+    # 遍历数据列表
     for i in range(0, len(attack_data), 2):
         grid_num = attack_data[i]
         grid_state = attack_data[i + 1]
@@ -295,49 +275,52 @@ def attack_logic(attack_data):
         [(0, 0), (1, 1), (2, 2)], [(0, 2), (1, 1), (2, 0)]  # 斜
     ]
 
-    # ==================== 2. 定义己方/对方棋子 ====================
+    # 2、 定义己方/对方棋子
     my_piece = 2  # 己方：1=黑棋，改2=白棋
     enemy_piece = 1 # 敌方
 
-    # ==================== 3.直接赢（差1子凑赢线） ====================
+    # 3、直接赢/堵对方赢
     for line in win_lines:
         # 提取当前赢线的3个状态值
         line_vals = [board[x][y] for x, y in line]
-        # 己方有2子，空1子 → 落空位置直接赢
+
+        # 3.1、先判断己方差1子，直接赢
         if line_vals.count(my_piece) == 2 and line_vals.count(0) == 1:
             empty_x, empty_y = line[line_vals.index(0)]
             # 坐标转格子序号：行x列y → x*3 + y +1
             return empty_x * 3 + empty_y + 1
 
-    # ==================== 4.堵对方赢（对方差1子） ====================
-    for line in win_lines:
-        line_vals = [board[x][y] for x, y in line]
-        # 若对方有2子，空1子 → 堵空位置
+        # 3.2. 再判断对方差1子，需要堵截
         if line_vals.count(enemy_piece) == 2 and line_vals.count(0) == 1:
             empty_x, empty_y = line[line_vals.index(0)]
             return empty_x * 3 + empty_y + 1
 
-    # ==================== 5.占中心 ====================
+    # 4、占中心
     if board[1][1] == 0:
         return 5
 
-    # ==================== 6.占角（格子1/3/7/9） ====================
+    # 5、占角（格子1/3/7/9）
     corners = [(0, 0, 1), (0, 2, 3), (2, 0, 7), (2, 2, 9)]  # (行,列,格子序号)
     for x, y, grid_num in corners:
         if board[x][y] == 0:
             return grid_num
 
-    # ==================== 7.占边（格子2/4/6/8） ====================
+    # 6、占边（格子2/4/6/8）
     edges = [(0, 1, 2), (1, 0, 4), (1, 2, 6), (2, 1, 8)]  # (行,列,格子序号)
     for x, y, grid_num in edges:
         if board[x][y] == 0:
             return grid_num
 
-    # ==================== 8. 棋盘已满 ====================
+    # 7、 棋盘已满
     return None
 
 
 def main_1(qipan_data):
+    """
+    封装完整下棋逻辑
+    :param qipan_data:
+    :return: 操作，位置
+    """
     result = None
     best_place = None
     if len(qipan_data) ==0:
@@ -350,7 +333,7 @@ def main_1(qipan_data):
         # 判断是否遵守规则
         rules = judge_rules(qipan_data[-2],qipan_data[-1])
         if rules: # 如果遵守了规则
-            # 先判断有没有赢-0,11,22,33
+            # 先判断有没有赢--0,11,22,33
             result = check_win(qipan_data[-1])
             # 如果没有赢并且没有平局
             if result == 0:
@@ -359,13 +342,8 @@ def main_1(qipan_data):
                 time.sleep(0.01)
         else:
             uart_obj.send_3([])
-            print("没有遵守规则")
 
     return result, best_place
-
-
-
-
 
 def find_center(corners):
     """
@@ -382,7 +360,7 @@ def find_center(corners):
                               [0, 1 / 3], [1 / 3, 1 / 3], [2 / 3, 1 / 3], [1, 1 / 3],
                               [0, 2 / 3], [1 / 3, 2 / 3], [2 / 3, 2 / 3], [1, 2 / 3],
                               [0, 1], [1 / 3, 1], [2 / 3, 1], [1, 1]])
-    # print(center_points)
+
     # 转换目标点
     dst_points = np.array(corners, dtype=np.float32)
     # 归一化矩形坐标
@@ -458,17 +436,24 @@ def main():
     global angle
     done = 1
     # 定义卷积核
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (5, 5))
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
     while not app.need_exit():
         img = cam.read()
-        # 转换成OpenCV格式灰度图
-        img_cv = image.image2cv(img, False, False)  # 这一步已经转化为BGR格式
-        img_gray = cv.cvtColor(img_cv, cv.COLOR_BGR2GRAY)
+        # 转换成OpenCV
+        img_cv = image.image2cv(img, False, False)
+        # 将原图转换为HSV颜色空间
+        hsv_img = cv.cvtColor(img_cv, cv.COLOR_BGR2HSV)
 
-        # 去除噪点-高斯模糊(暂定5,5)
-        img_blur = cv.GaussianBlur(img_gray, [5, 5], 0)
-        # 边缘检测-阈值暂定50,150
-        img_edge = cv.Canny(img_blur, 50, 150)
+        # 定义目标绿色的HSV范围--好像是通道转换步骤错了，红色HSV实际上变成了绿的，将错就错
+        lower_green = np.array([100, 80, 50])  # H:100-130（覆盖青绿/草绿），S≥80（低饱和），V≥50（低明度）
+        upper_green = np.array([130, 255, 255]) # S/V上限拉满
+        # 3. 生成绿色掩码
+        green_mask = cv.inRange(hsv_img, lower_green, upper_green)
+
+        # 去除噪点-高斯模糊(暂定3,3)
+        img_blur = cv.GaussianBlur(green_mask, [3, 3], 0)
+        # 边缘检测-阈值暂定30,90
+        img_edge = cv.Canny(img_blur, 30, 90)
 
         # 检查边缘是否被识别出
         # img_edge_maixcam = image.cv2image(img_edge)
@@ -479,16 +464,14 @@ def main():
         # 腐蚀
         img_erode = cv.erode(img_dilate, kernel)
 
-        # 查找轮廓
+        # 查找轮廓：得到仅包含绿色（实际为红色）区域的轮廓
         contours, _ = cv.findContours(img_erode, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
         # 检查
         # print(len(contours))
         if len(contours) > 0:
             # 找出最大轮廓
             biggest_contours = max(contours, key=cv.contourArea)
-            # 棋盘镶嵌在一个圆里面，可能会用到第二大轮廓，预留
-            # second_biggest = sorted(contours, key=cv.contourArea, reverse=True)[1]
-            # biggest_contours = second_biggest
             # 近似多边形
             epsilon = 0.02 * cv.arcLength(biggest_contours, True)
             approx = cv.approxPolyDP(biggest_contours, epsilon, True)  # 角点个数
@@ -510,9 +493,8 @@ def main():
                 # 左下，y-x最大
                 corn[3] = corners[np.argmax(corn_sub)]
                 corners = corn
-
                 # 绘制棋盘外框
-                cv.drawContours(img_cv, [approx], -1, (0, 255, 0), 2)
+                cv.drawContours(img_cv, [approx], -1, (0, 0, 255), 2)
 
                 # 检查棋盘是否被正常框出
                 # img = image.cv2image(img_cv, False, False)
@@ -545,7 +527,7 @@ def main():
                         # 给格子编号
                         img.draw_string(x, y, f"{i + 1}", image.COLOR_WHITE)
                         # 在中心画框
-                        width = 30
+                        width = 20
                         img.draw_rect(int(x - width / 2), int(y - width / 2), width, width,
                                       image.COLOR_WHITE)
 
@@ -559,20 +541,20 @@ def main():
                         value = hist.get_statistics().a_median()
 
                         # 检查数值大小，调整阈值
-                        img.draw_string(x, y-10, f'{value}', image.COLOR_BLUE)
+                        # img.draw_string(x, y-10, f'{value}', image.COLOR_BLUE)
 
                         # 根据值判定棋子颜色-暂定
                         color_chess = 0
                         if value < -105:
                             color_chess = 1  # 黑
-                        elif value > -60:
+                        elif value > -65:
                             color_chess = 2  # 白
                         else:
                             color_chess = 0
 
+                        # 标记棋子信息
                         if color_chess == 1:
                             img.draw_string(x, y + 10, "black", image.COLOR_WHITE)
-
                         elif color_chess == 2:
                             img.draw_string(x, y + 10, "white", image.COLOR_BLACK)
 
@@ -580,24 +562,23 @@ def main():
 
                     judge_data.append(one_group_data.copy())
 
+                    # 有效数据筛选
                     if len(judge_data) > 2:
                         # 先判断3个数据是否全相等
                         if len(judge_data) == 3 and judge_data[0] == judge_data[1] == judge_data[2]:
-                            # current_data = judge_data[0]
-                            #
                             if len(real_data) == 0:  # 如果首次采集
                                 real_data.append(judge_data.copy()[0])
                             else:
-                                # 对比上一次有效数据
+                                # 省略重复数据
                                 if judge_data[0] != real_data[-1]:
                                     real_data.append(judge_data.copy()[0])
-
-                            # 清空临时列表
+                            # 清空临时判断列表
                             judge_data.clear()
                         else:
                             # 3个数据不全相等，清空重采
                             judge_data.clear()
 
+                    # 控制历史数据列表长度
                     if len(real_data) > 10:
                         real_data.pop(0)
 
@@ -627,7 +608,7 @@ def main():
                 print(f"落 {best_place} 号格")
 
             elif recv_frame == [225, 2, 226]: # 正常对弈
-                state_now, best_place = main_1(real_data) #state_now = 0，11,22,33 内 黑 白 平
+                state_now, best_place = main_1(real_data) # state_now = 0，11,22,33 内 黑 白 平
                 if state_now == 0: # 继续下棋
                     uart_obj.send_2([best_place, angle])
                     print(f"落 {best_place} 号格")
@@ -643,11 +624,9 @@ def main():
 
             recv_frame.clear()
 
-
-        # 主动识别错误部分
+        # 主动识别部分
         if len(real_data) > 2:
             is_legal = judge_rules(real_data[-2],real_data[-1])
-           
             if is_legal:
                 # 合法，不做处理
                  is_win = check_win(real_data[-1])
@@ -662,10 +641,7 @@ def main():
 
             elif not is_legal:
                 print("检测到违规")
-        
-            
-        # get_state = play_logic.main(real_data)
-        # print(f"状态值{get_state}")
+
 
         # 调用exit_program，判断是否需要退出
         if exit_program(img):
@@ -673,7 +649,7 @@ def main():
 
         done += 1
         disp.show(img)
-        time.sleep(0.05)
+        time.sleep(0.001)
 
 
 if __name__ == '__main__':
@@ -691,5 +667,5 @@ if __name__ == '__main__':
         # 退出时释放资源
         cam.close()
         disp.close()
-        # uart_obj.close()
+        uart_obj.close()
         print("程序退出")
